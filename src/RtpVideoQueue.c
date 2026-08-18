@@ -235,8 +235,13 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
                 // grace period is still far shorter than the round trip speculation saves.
                 if (queue->speculativeLossDetectedTimeMs == 0) {
                     queue->speculativeLossDetectedTimeMs = now;
+                    queue->speculativeLossMissingPackets = queue->missingPackets;
+                    Limelog("RFI-GRACE: deferring speculative loss report for frame %u (%u of %u packets missing)\n",
+                            queue->currentFrameNumber, queue->missingPackets, totalPackets);
                 }
                 else if (now - queue->speculativeLossDetectedTimeMs >= SPECULATIVE_RFI_GRACE_PERIOD_MS) {
+                    Limelog("RFI-GRACE: EXPIRED - grace period elapsed (%u ms) for frame %u, reporting loss\n",
+                            (unsigned int)(now - queue->speculativeLossDetectedTimeMs), queue->currentFrameNumber);
                     notifyFrameLost(queue->currentFrameNumber, true);
                     queue->reportedLostFrame = true;
                 }
@@ -252,6 +257,16 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
 
         // Not enough data to recover yet
         return -1;
+    }
+
+    // Instrumentation: a deferred prediction that never needed to fire. This is
+    // the event the grace period exists to absorb -- the frame was momentarily
+    // unrecoverable on paper, and completed anyway once the late packets landed.
+    if (queue->speculativeLossDetectedTimeMs != 0 && !queue->reportedLostFrame) {
+        Limelog("RFI-GRACE: ABSORBED - frame %u completed %u ms after a predicted-unrecoverable hole of %u packets; no loss reported, no IDR requested\n",
+                queue->currentFrameNumber,
+                (unsigned int)(PltGetMillis() - queue->speculativeLossDetectedTimeMs),
+                queue->speculativeLossMissingPackets);
     }
 
     // If we make it here and reported a lost frame, we lied to the host. This can happen if we happen to get

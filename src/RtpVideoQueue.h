@@ -37,6 +37,7 @@ typedef struct _RTP_VIDEO_QUEUE {
     bool useFastQueuePath;
     bool reportedLostFrame;
     uint64_t speculativeLossDetectedTimeMs;
+    uint32_t speculativeLossMissingPackets;
 
     uint32_t currentFrameNumber;
 

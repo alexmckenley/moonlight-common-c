@@ -14,6 +14,9 @@
 // an out of order packet or incorrect prediction
 #define SPECULATIVE_RFI_COOLDOWN_PERIOD_US 300000000
 
+// Allow brief packet reordering to resolve before predicting unrecoverable loss.
+#define SPECULATIVE_RFI_GRACE_PERIOD_US 2000
+
 // RTP packets use a 90 KHz presentation timestamp clock
 #define PTS_DIVISOR 90
 
@@ -216,10 +219,24 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
             // NB: We use totalPackets - neededPackets instead of just bufferParityPackets here because we require
             // one extra parity shard for recovery if we're in FEC validation mode.
             if (queue->missingPackets > totalPackets - neededPackets) {
-                notifyFrameLost(queue->currentFrameNumber, true);
-                queue->reportedLostFrame = true;
+                uint64_t now = PltGetMicroseconds();
+
+                // A reordered batch can temporarily leave more holes than FEC can repair.
+                // notifyFrameLost() drops depacketizer state, so a prediction cannot be
+                // undone when those packets arrive. Allow a short grace period first.
+                // If no more packets arrive, the next frame still triggers the normal
+                // non-speculative loss notification.
+                if (queue->speculativeLossDetectedTimeUs == 0) {
+                    queue->speculativeLossDetectedTimeUs = now;
+                }
+                else if (now - queue->speculativeLossDetectedTimeUs >= SPECULATIVE_RFI_GRACE_PERIOD_US) {
+                    notifyFrameLost(queue->currentFrameNumber, true);
+                    queue->reportedLostFrame = true;
+                }
             }
             else {
+                queue->speculativeLossDetectedTimeUs = 0;
+
                 // Assert that there are enough remaining packets to possibly recover this frame.
                 LC_ASSERT(neededPackets - queue->pendingFecBlockList.count <= U16(queue->bufferHighestSequenceNumber - queue->receivedHighestSequenceNumber));
             }
@@ -701,6 +718,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
         queue->missingPackets = 0;
         queue->useFastQueuePath = true;
         queue->reportedLostFrame = false;
+        queue->speculativeLossDetectedTimeUs = 0;
         queue->bufferDataPackets = (nvPacket->fecInfo & 0xFFC00000) >> 22;
         queue->fecPercentage = (nvPacket->fecInfo & 0xFF0) >> 4;
         queue->bufferParityPackets = (queue->bufferDataPackets * queue->fecPercentage + 99) / 100;

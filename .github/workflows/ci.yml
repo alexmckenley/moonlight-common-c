@@ -77,3 +77,13 @@ jobs:
           mkdir build_release
           cmake ${{ matrix.cmake_args }} -DCMAKE_BUILD_TYPE=Release -B build_release -S .
           cmake --build build_release --config Release
+
+      - name: Test RTP video queue
+        if: runner.os == 'Linux'
+        run: |
+          for mode in Debug Release; do
+            cmake -S tests -B "build_tests_$mode" \
+              -DCMAKE_BUILD_TYPE="$mode" -DCMAKE_C_COMPILER=${{ matrix.cc }}
+            cmake --build "build_tests_$mode"
+            ctest --test-dir "build_tests_$mode" --output-on-failure
+          done
